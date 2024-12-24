@@ -37,9 +37,11 @@ class UserRegistrationView(generics.CreateAPIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
+from django.shortcuts import get_object_or_404
+
 class EmailVerificationView(generics.GenericAPIView):
     def get(self, request, user_id):
-        user = User.objects.get(id=user_id)
+        user = get_object_or_404(User, id=user_id)  # Updated for error handling
         user.is_active = True
         user.save()
         return Response({"message": "Email verified successfully."}, status=status.HTTP_200_OK)
