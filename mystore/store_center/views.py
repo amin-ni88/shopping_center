@@ -1,119 +1,94 @@
-# store/views.py
-
-from django.contrib.auth import get_user_model
-from django.core.mail import send_mail
-from django.urls import reverse
 from rest_framework import generics
-from rest_framework import status
+from rest_framework import serializers
 from rest_framework.response import Response
+from django.utils.http import urlsafe_base64_decode
+from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
+from .models import Review, Product, Cart  # Importing the necessary models
+from .serializers import ReviewSerializer, ProductSerializer, CartSerializer  # Importing the necessary serializers
 
-from .models import Product, Cart, Review, CartItem
-from .serializers import UserRegistrationSerializer, ProductSerializer, CartSerializer, \
-    ReviewSerializer, CartItemSerializer
+class UserRegistrationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'password']
+        extra_kwargs = {'password': {'write_only': True}}
 
-User = get_user_model()
-
+    def create(self, validated_data):
+        user = User(**validated_data)
+        user.set_password(validated_data['password'])
+        user.save()
+        return user
 
 class UserRegistrationView(generics.CreateAPIView):
+    queryset = User.objects.all()
     serializer_class = UserRegistrationSerializer
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-
-        # Send verification email
-        verification_link = request.build_absolute_uri(
-            reverse('verify_email', kwargs={'user_id': user.id})
-        )
-        send_mail(
-            'Verify your email',
-            f'Click the link to verify your email: {verification_link}',
-            'from@example.com',
-            [user.email],
-            fail_silently=False,
-        )
-
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
-from django.shortcuts import get_object_or_404
+    def post(self, request, *args, **kwargs):
+        return self.create(request, *args, **kwargs)
 
 class EmailVerificationView(generics.GenericAPIView):
-    def get(self, request, user_id):
-        user = get_object_or_404(User, id=user_id)  # Updated for error handling
-        user.is_active = True
-        user.save()
-        return Response({"message": "Email verified successfully."}, status=status.HTTP_200_OK)
+    def get(self, request, uidb64, token):
+        User = get_user_model()
+        try:
+            uid = urlsafe_base64_decode(uidb64).decode()
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            user = None
 
+        if user is not None and default_token_generator.check_token(user, token):
+            user.is_active = True
+            user.save()
+            return Response({"message": "Email verified successfully."}, status=200)
+        else:
+            return Response({"error": "Invalid token or user."}, status=400)
 
-class ProductListView(generics.ListCreateAPIView):
-    queryset = Product.objects.all()
-    serializer_class = ProductSerializer
-
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        search_query = self.request.query_params.get('search', None)
-        if search_query:
-            queryset = queryset.filter(name__icontains=search_query)
-        return queryset
-
-
-class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Product.objects.all()
-    serializer_class = ProductSerializer
-
-
-class CartView(generics.ListCreateAPIView):
-    serializer_class = CartSerializer
-
-    def get_queryset(self):
-        user = self.request.user
-        return Cart.objects.filter(user=user)
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        cart = serializer.save(user=request.user)
-        return Response(CartSerializer(cart).data, status=status.HTTP_201_CREATED)
-
-
-class CartItemView(generics.UpdateAPIView):
-    serializer_class = CartItemSerializer
-
-    def get_object(self):
-        cart_item = CartItem.objects.get(id=self.kwargs['pk'])
-        return cart_item
-
-    def update(self, request, *args, **kwargs):
-        cart_item = self.get_object()
-        serializer = self.get_serializer(cart_item, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
-
-
-class CheckoutView(generics.GenericAPIView):
-    def post(self, request):
-        # Implement payment processing with Stripe here
-        return Response({"message": "Payment processed successfully."}, status=status.HTTP_200_OK)
-
-
-class ReviewListView(generics.ListCreateAPIView):
+class ReviewListView(generics.ListAPIView):
     queryset = Review.objects.all()
     serializer_class = ReviewSerializer
 
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-
-
 class LikeProductView(generics.GenericAPIView):
+    """
+    View to like a product.
+    """
     def post(self, request, product_id):
-        product = Product.objects.get(id=product_id)
-        user = request.user
-        if user in product.likes.all():
-            product.likes.remove(user)
-            return Response({"message": "Product unliked."}, status=status.HTTP_200_OK)
-        else:
+        user = request.user  # Get the current user
+        try:
+            product = Product.objects.get(id=product_id)
+            # Add the user to the product's likes
             product.likes.add(user)
-            return Response({"message": "Product liked."}, status=status.HTTP_200_OK)
+            return Response({"message": "Product liked successfully!"}, status=200)
+        except Product.DoesNotExist:
+            return Response({"error": "Product not found."}, status=404)
+
+class ProductDetailView(generics.RetrieveAPIView):
+    """
+    View to retrieve a product's details.
+    """
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+
+class CartView(generics.ListCreateAPIView):
+    """
+    View to list and create carts.
+    """
+    queryset = Cart.objects.all()
+    serializer_class = CartSerializer
+
+class ProductListView(generics.ListAPIView):
+    """
+    View to list all products.
+    """
+    queryset = Product.objects.all()
+    serializer_class = ProductSerializer
+
+class PasswordResetView(generics.GenericAPIView):
+    def post(self, request):
+        email = request.data.get('email')
+        User = get_user_model()
+        try:
+            user = User.objects.get(email=email)
+            # Generate token and send email logic here
+            return Response({"message": "Password reset email sent."}, status=200)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=404)

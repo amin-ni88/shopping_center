@@ -22,7 +22,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
-        fields = '__all__'
+        fields = ['id', 'name', 'price', 'description', 'image']  # Explicitly define fields
 
     def get_likes_count(self, obj):
         return obj.likes.count()
